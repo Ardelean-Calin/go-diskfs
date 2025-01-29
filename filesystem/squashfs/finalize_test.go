@@ -189,3 +189,118 @@ func validateSquashfs(t *testing.T, f *os.File) {
 		t.Log(outString)
 	}
 }
+
+func TestFinalizeSquashfsWithSymlinks(t *testing.T) {
+	blocksize := int64(4096)
+	t.Run("valid with symlinks", func(t *testing.T) {
+		f, err := os.CreateTemp("", "squashfs_finalize_symlink_test")
+		fileName := f.Name()
+		defer os.Remove(fileName)
+		if err != nil {
+			t.Fatalf("Failed to create tmpfile: %v", err)
+		}
+
+		b := file.New(f, false)
+		fs, err := squashfs.Create(b, 0, 0, blocksize)
+		if err != nil {
+			t.Fatalf("Failed to squashfs.Create: %v", err)
+		}
+
+		// Create directories and files that will be targets for symlinks
+		for _, dir := range []string{"/", "/target", "/links"} {
+			err = fs.Mkdir(dir)
+			if err != nil {
+				t.Fatalf("Failed to squashfs.Mkdir(%s): %v", dir, err)
+			}
+		}
+
+		// Create a target file
+		targetFile, err := fs.OpenFile("/target/file.txt", os.O_CREATE|os.O_RDWR)
+		if err != nil {
+			t.Fatalf("Failed to create target file: %v", err)
+		}
+		content := []byte("target file content\n")
+		if _, err = targetFile.Write(content); err != nil {
+			t.Fatalf("Failed to write to target file: %v", err)
+		}
+
+		// Create symlinks
+		symlinks := map[string]string{
+			"/links/relative":    "../target/file.txt",
+			"/links/absolute":    "/target/file.txt",
+			"/links/dir":         "/target",
+			"/links/nonexistent": "/does/not/exist",
+		}
+
+		for linkPath, target := range symlinks {
+			err = fs.Symlink(target, linkPath)
+			if err != nil {
+				t.Fatalf("Failed to create symlink %s -> %s: %v", linkPath, target, err)
+			}
+		}
+
+		err = fs.Finalize(squashfs.FinalizeOptions{})
+		if err != nil {
+			t.Fatal("unexpected error fs.Finalize()", err)
+		}
+
+		// Verify the filesystem by reading it back
+		fs, err = squashfs.Read(b, 0, 0, blocksize)
+		if err != nil {
+			t.Fatalf("Failed to read back filesystem: %v", err)
+		}
+
+		// Check symlinks
+		for linkPath, expectedTarget := range symlinks {
+			fi, err := fs.OpenFile(linkPath, os.O_RDONLY)
+			if err != nil {
+				t.Errorf("Failed to open symlink %s: %v", linkPath, err)
+				continue
+			}
+			stat, ok := fi.(os.FileInfo)
+			if !ok {
+				t.Errorf("Could not convert OpenFile() to FileInfo for %s", linkPath)
+				continue
+			}
+			fileStat, ok := stat.(os.FileInfo)
+			if !ok {
+				t.Errorf("Could not convert to FileInfo for %s", linkPath)
+				continue
+			}
+			symStat, ok := fileStat.Sys().(squashfs.FileStat)
+			if !ok {
+				t.Errorf("Could not convert Sys() to FileStat for %s", linkPath)
+				continue
+			}
+			target, err := symStat.Readlink()
+			if err != nil {
+				t.Errorf("Failed to read symlink %s: %v", linkPath, err)
+				continue
+			}
+
+			if target != expectedTarget {
+				t.Errorf("Symlink %s points to %s, expected %s", linkPath, target, expectedTarget)
+			}
+		}
+
+		// Try reading through a symlink
+		file, err := fs.OpenFile("/links/relative", os.O_RDONLY)
+		if err != nil {
+			t.Fatalf("Failed to open file through symlink: %v", err)
+		}
+
+		data, err := io.ReadAll(file)
+		if err != nil {
+			t.Fatalf("Failed to read through symlink: %v", err)
+		}
+
+		if string(data) != string(content) {
+			t.Errorf("Content through symlink doesn't match: got %q, want %q", string(data), string(content))
+		}
+
+		err = f.Close()
+		if err != nil {
+			t.Fatalf("could not close squashfs file: %v", err)
+		}
+	})
+}

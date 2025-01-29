@@ -1131,31 +1131,10 @@ func createInodes(fileList []*finalizeFileInfo, idtable map[uint32]uint16, optio
 				inodeT = inodeBasicFile
 			}
 		case fileSymlink:
-			/*
-				use an extendedSymlink if it has extended attributes
-				- startBlock (from beginning of data section) does not fit in uint32
-				- fileSize does not fit in uint32
-				- it is a sparse file
-				- it has extended attributes
-				- it has hard links
-			*/
-			target, err := os.Readlink(e.path)
+			var err error
+			in, inodeT, err = finalizeSymlink(e)
 			if err != nil {
-				return fmt.Errorf("unable to read target for symlink at %s: %v", e.path, err)
-			}
-			if len(e.xattrs) > 0 {
-				in = &extendedSymlink{
-					links:      e.links,
-					target:     target,
-					xAttrIndex: e.xAttrIndex,
-				}
-				inodeT = inodeExtendedSymlink
-			} else {
-				in = &basicSymlink{
-					links:  e.links,
-					target: target,
-				}
-				inodeT = inodeBasicSymlink
+				return fmt.Errorf("failed to finalize symlink %s: %v", e.path, err)
 			}
 		case fileDirectory:
 			/*
@@ -1282,8 +1261,8 @@ func createInodes(fileList []*finalizeFileInfo, idtable map[uint32]uint16, optio
 		e.inode = &inodeImpl{
 			header: &inodeHeader{
 				inodeType: inodeT,
-				modTime:   e.ModTime(),
-				mode:      e.Mode(),
+				modTime:   e.modTime,
+				mode:      e.mode,
 				uidIdx:    uidIdx,
 				gidIdx:    gidIdx,
 				index:     inodeIndex,
@@ -1480,4 +1459,33 @@ func updateInodesFromDirectories(files []*finalizeFileInfo) error {
 		}
 	}
 	return nil
+}
+
+func finalizeSymlink(e *finalizeFileInfo) (inodeBody, inodeType, error) {
+	target, err := os.Readlink(e.path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("unable to read target for symlink at %s: %v", e.path, err)
+	}
+
+	var (
+		in     inodeBody
+		inodeT inodeType
+	)
+
+	if len(e.xattrs) > 0 {
+		in = &extendedSymlink{
+			links:      e.links,
+			target:     target,
+			xAttrIndex: e.xAttrIndex,
+		}
+		inodeT = inodeExtendedSymlink
+	} else {
+		in = &basicSymlink{
+			links:  e.links,
+			target: target,
+		}
+		inodeT = inodeBasicSymlink
+	}
+
+	return in, inodeT, nil
 }
