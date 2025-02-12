@@ -560,3 +560,7 @@ func (fsm *FileSystem) Label() string {
 func (fsm *FileSystem) SetLabel(string) error {
 	return fmt.Errorf("ISO9660 filesystem is read-only")
 }
+
+func (fs *FileSystem) Walk(root string, fn filesystem.WalkFunc) error {
+	return filesystem.GenericWalk(fs, root, fn)
+}

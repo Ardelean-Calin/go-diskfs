@@ -52,6 +52,10 @@ func (fs *FileSystem) SetLabel(string) error {
 	return filesystem.ErrReadonlyFilesystem
 }
 
+func (fs *FileSystem) Walk(root string, fn filesystem.WalkFunc) error {
+	return filesystem.GenericWalk(fs, root, fn)
+}
+
 // Workspace get the workspace path
 func (fs *FileSystem) Workspace() string {
 	return fs.workspace

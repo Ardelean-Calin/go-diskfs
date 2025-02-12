@@ -1092,6 +1092,12 @@ func (fs *FileSystem) SetLabel(label string) error {
 	return fs.writeSuperblock()
 }
 
+// Walk walks the file tree rooted at root, calling fn for each file or
+// directory in the tree, including root.
+func (fs *FileSystem) Walk(root string, fn filesystem.WalkFunc) error {
+	return filesystem.GenericWalk(fs, root, fn)
+}
+
 // readInode read a single inode from disk
 func (fs *FileSystem) readInode(inodeNumber uint32) (*inode, error) {
 	if inodeNumber == 0 {

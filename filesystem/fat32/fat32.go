@@ -859,6 +859,12 @@ func (fs *FileSystem) SetLabel(volumeLabel string) error {
 	return nil
 }
 
+// Walk walks the file tree rooted at root, calling fn for each file or
+// directory in the tree, including root.
+func (fs *FileSystem) Walk(root string, fn filesystem.WalkFunc) error {
+	return filesystem.GenericWalk(fs, root, fn)
+}
+
 // read directory entries for a given cluster
 func (fs *FileSystem) getClusterList(firstCluster uint32) ([]uint32, error) {
 	// first, get the chain of clusters

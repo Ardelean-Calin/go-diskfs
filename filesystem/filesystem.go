@@ -5,6 +5,7 @@ package filesystem
 import (
 	"errors"
 	"os"
+	"path/filepath"
 )
 
 var (
@@ -12,6 +13,8 @@ var (
 	ErrNotImplemented     = errors.New("method not implemented (patches are welcome)")
 	ErrReadonlyFilesystem = errors.New("read-only filesystem")
 )
+
+type WalkFunc filepath.WalkFunc
 
 // FileSystem is a reference to a single filesystem on a disk
 type FileSystem interface {
@@ -46,6 +49,18 @@ type FileSystem interface {
 	// SetLabel changes the label on the writable filesystem. Different file system may hav different
 	// length constraints.
 	SetLabel(label string) error
+	// Walk walks the file tree rooted at root, calling fn for each file or
+	// directory in the tree, including root.
+	//
+	// All errors that arise visiting files and directories are filtered by fn:
+	// see the [WalkFunc] documentation for details.
+	//
+	// The files are walked in lexical order, which makes the output deterministic
+	// but requires Walk to read an entire directory into memory before proceeding
+	// to walk that directory.
+	//
+	// Walk does not follow symbolic links.
+	Walk(root string, fn WalkFunc) error
 }
 
 // Type represents the type of disk this is
