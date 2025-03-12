@@ -269,6 +269,98 @@ func (fs *FileSystem) GetCacheSize() int {
 	return fs.cache.maxBlocks * int(fs.blocksize)
 }
 
+// Unsquashfs extracts the contents of the SquashFS filesystem to the specified destination path.
+// It preserves the directory structure, file permissions, and ownership where possible.
+// Returns an error if the extraction fails.
+func (fs *FileSystem) Unsquashfs(destPath string) error {
+	// Create the destination directory if it doesn't exist
+	if err := os.MkdirAll(destPath, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// Start extraction from the root directory
+	return fs.extractDirectory("/", destPath)
+}
+
+// extractDirectory recursively extracts a directory and its contents to the destination path
+func (fs *FileSystem) extractDirectory(sourcePath, destPath string) error {
+	// Read the directory entries
+	entries, err := fs.ReadDir(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to read directory %s: %w", sourcePath, err)
+	}
+
+	// Process each entry
+	for _, entry := range entries {
+		srcEntryPath := path.Join(sourcePath, entry.Name())
+		destEntryPath := path.Join(destPath, entry.Name())
+
+		if entry.IsDir() {
+			// Create the directory with proper permissions
+			if err := os.MkdirAll(destEntryPath, entry.Mode()); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", destEntryPath, err)
+			}
+
+			// Set ownership if possible
+			if dirEntry, ok := entry.(*directoryEntry); ok {
+				if err := os.Chown(destEntryPath, int(dirEntry.uid), int(dirEntry.gid)); err != nil {
+					// Just log the error but continue - this might fail due to permissions
+					fmt.Printf("Warning: failed to set ownership on %s: %v\n", destEntryPath, err)
+				}
+			}
+
+			// Recursively extract the subdirectory
+			if err := fs.extractDirectory(srcEntryPath, destEntryPath); err != nil {
+				return err
+			}
+		} else {
+			// Extract the file
+			if err := fs.extractFile(srcEntryPath, destEntryPath, entry); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractFile extracts a single file from the SquashFS to the destination path
+func (fs *FileSystem) extractFile(sourcePath, destPath string, info os.FileInfo) error {
+	// Open the source file
+	sourceFile, err := fs.OpenFile(sourcePath, os.O_RDONLY)
+	if err != nil {
+		return fmt.Errorf("failed to open source file %s: %w", sourcePath, err)
+	}
+	defer sourceFile.Close()
+
+	// Create the destination file
+	destFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return fmt.Errorf("failed to create destination file %s: %w", destPath, err)
+	}
+	defer destFile.Close()
+
+	// Copy the content
+	if _, err := io.Copy(destFile, sourceFile); err != nil {
+		return fmt.Errorf("failed to copy file content from %s to %s: %w", sourcePath, destPath, err)
+	}
+
+	// Set ownership if possible
+	if dirEntry, ok := info.(*directoryEntry); ok {
+		if err := os.Chown(destPath, int(dirEntry.uid), int(dirEntry.gid)); err != nil {
+			// Just log the error but continue - this might fail due to permissions
+			fmt.Printf("Warning: failed to set ownership on %s: %v\n", destPath, err)
+		}
+	}
+
+	// Set modification time
+	if err := os.Chtimes(destPath, info.ModTime(), info.ModTime()); err != nil {
+		fmt.Printf("Warning: failed to set modification time on %s: %v\n", destPath, err)
+	}
+
+	return nil
+}
+
 // Mkdir make a directory at the given path. It is equivalent to `mkdir -p`, i.e. idempotent, in that:
 //
 // * It will make the entire tree path if it does not exist
