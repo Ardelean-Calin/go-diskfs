@@ -91,6 +91,50 @@ func CreateFromPath(dir string) (*FileSystem, error) {
 	}, nil
 }
 
+// WriteToFile writes the squashfs filesystem to a file at the specified path.
+// It creates the file if it doesn't exist, or truncates it if it does.
+// The filesystem must have been created with CreateFromPath.
+//
+// options can be provided to customize the filesystem creation process.
+// If options is nil, default options will be used.
+func (fs *FileSystem) WriteToFile(filePath string, options *FinalizeOptions) error {
+	if fs.workspace == "" {
+		return fmt.Errorf("cannot write an already finalized filesystem")
+	}
+
+	// Create the output file
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer file.Close()
+
+	// Get file info to determine size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	// Create a backend storage from the file
+	backendStorage := backend.New(file, false) // false means not read-only
+
+	// Set the size and start position
+	fs.size = fileInfo.Size()
+	fs.start = 0
+	fs.backend = backendStorage
+
+	// Use default options if none provided
+	finalOptions := FinalizeOptions{
+		Compression: newGzipCompressor(),
+	}
+	if options != nil {
+		finalOptions = *options
+	}
+
+	// Finalize the filesystem
+	return fs.Finalize(finalOptions)
+}
+
 // copyDir recursively copies a directory tree, attempting to preserve permissions.
 func copyDir(src, dst string) error {
 	// Get properties of source dir
@@ -152,6 +196,23 @@ func copyFile(src, dst string) error {
 	// Copy the content
 	_, err = io.Copy(dstFile, srcFile)
 	return err
+}
+
+// CreateSquashfsFile creates a squashfs file at the specified output path from the contents of the source directory.
+// This is a convenience function that combines CreateFromPath and WriteToFile.
+//
+// options can be provided to customize the filesystem creation process.
+// If options is nil, default options will be used.
+func CreateSquashfsFile(sourceDir, outputPath string, options *FinalizeOptions) error {
+	// Create filesystem from directory
+	fs, err := CreateFromPath(sourceDir)
+	if err != nil {
+		return fmt.Errorf("failed to create filesystem from directory: %w", err)
+	}
+	defer fs.Close() // Clean up temporary workspace
+
+	// Write to output file
+	return fs.WriteToFile(outputPath, options)
 }
 
 // Create creates a squashfs filesystem in a given directory
