@@ -121,3 +121,22 @@ Future plans are to add the following:
 * `Rock Ridge` sparse file support - supports the flag, but not yet reading or writing
 * `squashfs` sparse file support - currently treats sparse files as regular files
 * `qcow` disk format
+
+## SquashFS Extraction
+SquashFS filesystems are read-only, but you can extract their contents to a regular directory using the `Unsquashfs` method:
+
+```go
+// Open a SquashFS filesystem
+fs, err := squashfs.Read(backend, size, start, blocksize)
+if err != nil {
+    // handle error
+}
+
+// Extract the entire filesystem to a destination directory
+err = fs.Unsquashfs("/path/to/extract/to")
+if err != nil {
+    // handle error
+}
+```
+
+This will extract all files and directories from the SquashFS filesystem to the specified path, preserving the directory structure, file permissions, and ownership where possible.

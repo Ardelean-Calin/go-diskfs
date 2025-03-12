@@ -784,6 +784,159 @@ func TestFinalize(t *testing.T) {
 
 }
 
+func TestUnsquashfs(t *testing.T) {
+	// Skip if the test file doesn't exist
+	if _, err := os.Stat(Squashfsfile); os.IsNotExist(err) {
+		t.Skip("Test squashfs file not found, skipping test")
+	}
+
+	// Open the squash file
+	f, err := os.Open(Squashfsfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b := file.New(f, true)
+	// Create the filesystem
+	fs, err := Read(b, fi.Size(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a temporary directory for extraction
+	tempDir := t.TempDir()
+
+	// Extract the filesystem
+	err = fs.Unsquashfs(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to extract squashfs: %v", err)
+	}
+
+	// Verify some expected files exist
+	expectedFiles := []string{
+		"README.md",
+		"foo/filename_10",
+		"foo/filename_75",
+	}
+
+	for _, expectedFile := range expectedFiles {
+		extractedPath := filepath.Join(tempDir, expectedFile)
+		if _, err := os.Stat(extractedPath); os.IsNotExist(err) {
+			t.Errorf("Expected file %s not found at %s", expectedFile, extractedPath)
+		}
+	}
+
+	// Verify content of a specific file
+	readmeContent, err := os.ReadFile(filepath.Join(tempDir, "README.md"))
+	if err != nil {
+		t.Errorf("Failed to read extracted README.md: %v", err)
+	} else if string(readmeContent) != "README\n" {
+		t.Errorf("README.md content mismatch, got %q, want %q", string(readmeContent), "README\n")
+	}
+
+	// Verify permissions and ownership are preserved
+	// This is a basic check - full verification would be more complex
+	readmeInfo, err := os.Stat(filepath.Join(tempDir, "README.md"))
+	if err != nil {
+		t.Errorf("Failed to stat README.md: %v", err)
+	} else if readmeInfo.Mode().Perm()&0444 == 0 {
+		t.Errorf("README.md should be readable, got mode %v", readmeInfo.Mode())
+	}
+}
+
+func TestUnsquashfsWithLargeFiles(t *testing.T) {
+	// Skip if the test file doesn't exist
+	if _, err := os.Stat(SquashfsReadTestFile); os.IsNotExist(err) {
+		t.Skip("Test squashfs read test file not found, skipping test")
+	}
+
+	// Open the squash file
+	f, err := os.Open(SquashfsReadTestFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b := file.New(f, true)
+	// Create the filesystem
+	fs, err := Read(b, fi.Size(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a temporary directory for extraction
+	tempDir := t.TempDir()
+
+	// Extract the filesystem
+	err = fs.Unsquashfs(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to extract squashfs: %v", err)
+	}
+
+	// Read the check files in creating the tests
+	var tests []readTest
+	flist, err := os.Open(SquashfsReatTestMd5sums)
+	if err != nil {
+		t.Skip("MD5 sums file not found, skipping verification")
+	} else {
+		defer flist.Close()
+		scanner := bufio.NewScanner(flist)
+		for scanner.Scan() {
+			line := scanner.Text()
+			field := strings.Fields(line)
+			size, err := strconv.Atoi(field[2])
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := strings.TrimPrefix(field[1], ".")
+			tests = append(tests, readTest{
+				name:   strings.TrimPrefix(name, "/"),
+				p:      name,
+				size:   size,
+				md5sum: field[0],
+			})
+		}
+		if err := scanner.Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Verify MD5 sums of extracted files
+	for _, test := range tests {
+		extractedPath := filepath.Join(tempDir, test.p)
+		if _, err := os.Stat(extractedPath); os.IsNotExist(err) {
+			t.Errorf("Expected file %s not found at %s", test.p, extractedPath)
+			continue
+		}
+
+		data, err := os.ReadFile(extractedPath)
+		if err != nil {
+			t.Errorf("Failed to read file %s: %v", test.p, err)
+			continue
+		}
+
+		if len(data) != test.size {
+			t.Errorf("File %s size mismatch: got %d, want %d", test.p, len(data), test.size)
+		}
+
+		//nolint:gosec // MD5 is still fine for detecting file corruptions
+		md5sumBytes := md5.Sum(data)
+		md5sum := hex.EncodeToString(md5sumBytes[:])
+		if md5sum != test.md5sum {
+			t.Errorf("File %s MD5 mismatch: got %s, want %s", test.p, md5sum, test.md5sum)
+		}
+	}
+}
+
 func TestCreateAndReadFile(t *testing.T) {
 	CreateFilesystem := func(d *disk.Disk, spec disk.FilesystemSpec) (filesystem.FileSystem, error) {
 		// find out where the partition starts and ends, or if it is the entire disk
