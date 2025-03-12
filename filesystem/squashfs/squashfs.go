@@ -57,6 +57,103 @@ func (fs *FileSystem) Workspace() string {
 	return fs.workspace
 }
 
+// CreateFromPath creates a squashfs filesystem from a directory path
+//
+// requires the path to the directory to create the filesystem from
+//
+// It returns a FileSystem that can be finalized to create the actual squashfs image
+func CreateFromPath(dir string) (*FileSystem, error) {
+	// Check if directory exists
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("error accessing directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", dir)
+	}
+
+	// Create a temporary working area
+	tmpdir, err := os.MkdirTemp("", "diskfs_squashfs")
+	if err != nil {
+		return nil, fmt.Errorf("could not create working directory: %v", err)
+	}
+
+	// Copy the contents of the source directory to the workspace
+	err = copyDir(dir, tmpdir)
+	if err != nil {
+		os.RemoveAll(tmpdir)
+		return nil, fmt.Errorf("failed to copy directory contents: %w", err)
+	}
+
+	return &FileSystem{
+		workspace:  tmpdir,
+		blocksize:  defaultBlockSize,
+	}, nil
+}
+
+// copyDir recursively copies a directory tree, attempting to preserve permissions.
+func copyDir(src, dst string) error {
+	// Get properties of source dir
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	// Create the destination directory
+	if err = os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := path.Join(src, entry.Name())
+		dstPath := path.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// Recursive call for directories
+			if err = copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy the file
+			if err = copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	// Open the source file
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// Create the destination file
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	// Copy the content
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
 // Create creates a squashfs filesystem in a given directory
 //
 // requires the backend.Storage where to create the filesystem, size is the size of the filesystem in bytes,

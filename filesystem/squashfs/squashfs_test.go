@@ -937,6 +937,135 @@ func TestUnsquashfsWithLargeFiles(t *testing.T) {
 	}
 }
 
+func TestCreateFromPath(t *testing.T) {
+	// Create a temporary directory with some test files
+	tempDir := t.TempDir()
+	
+	// Create a few files and directories
+	testDirs := []string{
+		"dir1",
+		"dir2",
+		"dir2/subdir",
+	}
+	
+	testFiles := map[string]string{
+		"file1.txt":          "This is file 1",
+		"dir1/file2.txt":     "This is file 2 in dir1",
+		"dir2/file3.txt":     "This is file 3 in dir2",
+		"dir2/subdir/file4.txt": "This is file 4 in subdir",
+	}
+	
+	// Create the directories
+	for _, dir := range testDirs {
+		err := os.MkdirAll(filepath.Join(tempDir, dir), 0755)
+		if err != nil {
+			t.Fatalf("Failed to create test directory: %v", err)
+		}
+	}
+	
+	// Create the files
+	for path, content := range testFiles {
+		err := os.WriteFile(filepath.Join(tempDir, path), []byte(content), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create test file: %v", err)
+		}
+	}
+	
+	// Create a squashfs from the directory
+	fs, err := CreateFromPath(tempDir)
+	if err != nil {
+		t.Fatalf("CreateFromPath failed: %v", err)
+	}
+	defer fs.Close()
+	
+	// Verify the workspace was created and contains the files
+	if fs.workspace == "" {
+		t.Fatal("Expected workspace to be set")
+	}
+	
+	// Check that the files were copied to the workspace
+	for path, content := range testFiles {
+		workspacePath := filepath.Join(fs.workspace, path)
+		data, err := os.ReadFile(workspacePath)
+		if err != nil {
+			t.Errorf("Failed to read file from workspace: %v", err)
+			continue
+		}
+		
+		if string(data) != content {
+			t.Errorf("File content mismatch for %s: got %q, want %q", path, string(data), content)
+		}
+	}
+	
+	// Create a temporary file to hold the squashfs image
+	imgFile, err := os.CreateTemp("", "squashfs-test-*.img")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(imgFile.Name())
+	defer imgFile.Close()
+	
+	// Make the file large enough
+	if err := imgFile.Truncate(10 * 1024 * 1024); err != nil {
+		t.Fatalf("Failed to truncate file: %v", err)
+	}
+	
+	// Create a backend for the file
+	b := file.New(imgFile, false)
+	
+	// Set the filesystem backend and other required fields
+	fs.backend = b
+	fs.size = 10 * 1024 * 1024
+	fs.start = 0
+	
+	// Finalize the filesystem
+	err = fs.Finalize(FinalizeOptions{
+		NoCompressInodes:    true,
+		NoCompressData:      true,
+		NoCompressFragments: true,
+	})
+	if err != nil {
+		t.Fatalf("Failed to finalize filesystem: %v", err)
+	}
+	
+	// Reopen the file for reading
+	imgFile.Close()
+	readFile, err := os.Open(imgFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to open image file: %v", err)
+	}
+	defer readFile.Close()
+	
+	// Create a backend for reading
+	readBackend := file.New(readFile, true)
+	
+	// Read the filesystem
+	readFs, err := Read(readBackend, 10*1024*1024, 0, 0)
+	if err != nil {
+		t.Fatalf("Failed to read filesystem: %v", err)
+	}
+	
+	// Verify we can read the files
+	for path, expectedContent := range testFiles {
+		file, err := readFs.OpenFile(path, os.O_RDONLY)
+		if err != nil {
+			t.Errorf("Failed to open file %s: %v", path, err)
+			continue
+		}
+		
+		content, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			t.Errorf("Failed to read file %s: %v", path, err)
+			continue
+		}
+		
+		if string(content) != expectedContent {
+			t.Errorf("Content mismatch for %s: got %q, want %q", path, string(content), expectedContent)
+		}
+	}
+}
+
 func TestCreateAndReadFile(t *testing.T) {
 	CreateFilesystem := func(d *disk.Disk, spec disk.FilesystemSpec) (filesystem.FileSystem, error) {
 		// find out where the partition starts and ends, or if it is the entire disk
